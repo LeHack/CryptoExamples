@@ -43,7 +43,7 @@ int print_errors(const char *msg) {
 }
 
 int decrypt(int keylen, int infd, int outfd) {
-    unsigned char inbuff[BS], outbuf[BS]; // could be optimized by runtime allocation
+    unsigned char inbuff[BS], outbuf[BS];
     int n = 0, outbufready = 0, prev_n = 0, padding = 0;
 
     while (1) {
@@ -80,7 +80,7 @@ int decrypt(int keylen, int infd, int outfd) {
 }
 
 int encrypt(int keylen, int infd, int outfd) {
-    unsigned char inbuf[BS], outbuf[BS]; // could be optimized by runtime allocation
+    unsigned char inbuf[BS], outbuf[BS];
     int n = 0, i = 0;
 
     while (1) {
