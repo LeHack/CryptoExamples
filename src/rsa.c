@@ -1,6 +1,6 @@
 /*
  * This is a very simple implementation of a file encoder/decoder using
- * RSA mode with PKCS#7 padding
+ * RSA cypher with PKCS#7 padding
  *
  * Syntax:
  *  ./rsa [genkey|encrypt|decrypt] [params]
@@ -95,7 +95,7 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     pass = malloc(PASSLEN * sizeof(char));
     get_passwd(pass, PASSLEN);
 
-    // first make sure to seed the random numbers generator
+    // also make sure to seed the random numbers generator
     printf("Seeding random numbers generator...");
     fflush(stdout);
     if ((randfd = open("/dev/random", O_RDONLY)) == -1)
@@ -125,9 +125,9 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     else
         printf("OK\n");
 
-    // create a new BIO to print the key data to
+    // create a new BIO for storing the key data
     keybio = BIO_new(BIO_s_mem());
-    // print key pair characteristics into the BIO
+    // print the data into the BIO
     RSA_print(keybio, keypair, 4);
 
     // and print it out to the terminal
@@ -137,7 +137,7 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
         bzero(&termbuf, 1024);
     }
 
-    // finally write to file
+    // finally dump both keys into files
     printf("Storing keypair...");
     fflush(stdout);
 
@@ -261,7 +261,7 @@ int main (int argc, char *argv[]) {
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
 
-    // wygenerowanie zestawu kluczy
+    // generating a keypair
     if (mode == 1) {
         if ((prvkeyfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1)
             perror("cannot open file to write the private key");
@@ -283,7 +283,7 @@ int main (int argc, char *argv[]) {
         fflush(prvkey); fsync(prvkeyfd); close(prvkeyfd);
         fflush(pubkey); fsync(pubkeyfd); close(pubkeyfd);
     }
-    // szyfrowanie/deszyfrowanie
+    // encryption/descryption
     else {
         if ((infd = open(argv[2], rflags, S_IRUSR | S_IWUSR)) == -1)
             perror("open input file error");
