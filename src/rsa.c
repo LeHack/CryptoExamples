@@ -263,11 +263,6 @@ int main (int argc, char *argv[]) {
 
     // generating a keypair
     if (mode == 1) {
-        if ((prvkeyfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1)
-            perror("cannot open file to write the private key");
-        if ((pubkeyfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1)
-            perror("cannot open file to write the public key");
-
         int keylen = 0;
         sscanf(argv[2], "%d", &keylen);
         if (keylen < 1024) {
@@ -275,6 +270,10 @@ int main (int argc, char *argv[]) {
             return 1;
         }
 
+        if ((prvkeyfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1)
+            perror("cannot open file to write the private key");
+        if ((pubkeyfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1)
+            perror("cannot open file to write the public key");
         // turn file descriptors into streams, since that's what generate_keys expects
         prvkey = fdopen(prvkeyfd, "wb");
         pubkey = fdopen(pubkeyfd, "wb");
