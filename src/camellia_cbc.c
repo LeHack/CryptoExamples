@@ -24,11 +24,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#define BS 16 // Camellia uses a 128B / 16b blocksize
+#define BS 16 // Camellia uses a 128b / 16B blocksize
 #define SECRET "klucz"
 
 CAMELLIA_KEY key;
-unsigned char iv[] = "abcdefgh";
+unsigned char iv[] = "abcdefgh"; // should be derived from passphrase instead of just being hardcoded
 
 int print_errors(const char *msg) {
     unsigned long err;

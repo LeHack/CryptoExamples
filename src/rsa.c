@@ -6,8 +6,8 @@
  *  ./rsa [genkey|encrypt|decrypt] [params]
  * Example:
  *  ./rsa genkey 2048 priv.key pub.key
- *  ./rsa encrypt myfile.doc myfile.doc.enc
- *  ./rsa decrypt myfile.doc.enc myfile.doc
+ *  ./rsa encrypt pub.key myfile.doc myfile.doc.enc
+ *  ./rsa decrypt priv.key myfile.doc.enc myfile.doc
  *
  * !!! WARNING !!!
  * This is a proof of concept. DO NOT use it to encode anything you actually want to protect.
@@ -131,10 +131,10 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     RSA_print(keybio, keypair, 4);
 
     // and print it out to the terminal
-    bzero(&termbuf, 1024);
+    bzero(termbuf, 1024);
     while (BIO_read(keybio, termbuf, 1024) > 0) {
         printf("%s", termbuf);
-        bzero(&termbuf, 1024);
+        bzero(termbuf, 1024);
     }
 
     // finally dump both keys into files
@@ -154,8 +154,42 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     return;
 }
 
+RSA * createRSA(unsigned char * key, int public) {
+    RSA * rsa = NULL;
+    BIO * keybio;
+    keybio = BIO_new_mem_buf(key, -1);
+    if (keybio==NULL) {
+        printf( "Failed to create key BIO");
+        return 0;
+    }
+
+    if(public)
+        rsa = PEM_read_bio_RSA_PUBKEY(keybio, &rsa, NULL, NULL);
+    else
+        rsa = PEM_read_bio_RSAPrivateKey(keybio, &rsa, NULL, NULL);
+
+    return rsa;
+}
+
+RSA * createRSAFromFD(int keyfd, int public) {
+    FILE * fp = fdopen(keyfd, "rb");
+    if(fp == NULL) {
+        printf("Unable to open key stream\n");
+        return NULL;
+    }
+
+    RSA * rsa = RSA_new();
+
+    if(public)
+        rsa = PEM_read_RSA_PUBKEY(fp, &rsa, NULL, NULL);
+    else
+        rsa = PEM_read_RSAPrivateKey(fp, &rsa, NULL, NULL);
+
+    return rsa;
+}
+
 /* TODO */
-void decrypt(int infd, int outfd) {
+void decrypt(RSA * prvkey, int infd, int outfd) {
 //    unsigned char inbuff[OP_SIZE], outbuf[IP_SIZE];
 //    int n = 0, bufready = 0, prev_n = 0, olen = 0;
 //
@@ -192,7 +226,7 @@ void decrypt(int infd, int outfd) {
 }
 
 /* TODO */
-void encrypt(int infd, int outfd) {
+void encrypt(RSA * pubkey, int infd, int outfd) {
 //    unsigned char inbuff[IP_SIZE], outbuf[OP_SIZE];
 //    int n, i;
 //
@@ -232,7 +266,7 @@ int validate_params(char *argv[]) {
             mode = 3;
 
         // reset mode if any of the params is missing
-        if (argv[2] == NULL || argv[3] == NULL || (mode == 1 && argv[4] == NULL))
+        if (argv[2] == NULL || argv[3] == NULL || argv[4] == NULL)
             mode = 0;
     }
 
@@ -240,7 +274,7 @@ int validate_params(char *argv[]) {
         printf("Bad or incomplete parameters\n");
         printf("Syntax:\n");
         printf("\tgenkey keylength priv.key pub.key\n");
-        printf("\t[encrypt|decrypt] infile outfile\n");
+        printf("\t[encrypt|decrypt] keyfile infile outfile\n");
     }
 
     return mode;
@@ -248,8 +282,9 @@ int validate_params(char *argv[]) {
 
 int main (int argc, char *argv[]) {
     int rflags = 0, wflags = 0,
-        prvkeyfd = 0, pubkeyfd = 0, infd = 0, outfd = 0;
-    FILE *prvkey = NULL, *pubkey = NULL;
+        prvkeyfd = 0, pubkeyfd = 0, infd = 0, outfd = 0, keyfd = 0;
+    FILE * prvkey = NULL, * pubkey = NULL;
+    RSA * key = NULL;
 
     int mode = validate_params(argv);
     if (mode == 0) {
@@ -270,10 +305,14 @@ int main (int argc, char *argv[]) {
             return 1;
         }
 
-        if ((prvkeyfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1)
+        if ((prvkeyfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1) {
             perror("cannot open file to write the private key");
-        if ((pubkeyfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1)
+            return 1;
+        }
+        if ((pubkeyfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1) {
             perror("cannot open file to write the public key");
+            return 1;
+        }
         // turn file descriptors into streams, since that's what generate_keys expects
         prvkey = fdopen(prvkeyfd, "wb");
         pubkey = fdopen(pubkeyfd, "wb");
@@ -284,18 +323,33 @@ int main (int argc, char *argv[]) {
     }
     // encryption/descryption
     else {
-        if ((infd = open(argv[2], rflags, S_IRUSR | S_IWUSR)) == -1)
-            perror("open input file error");
+        if ((keyfd = open(argv[2], rflags, S_IRUSR | S_IWUSR)) == -1) {
+            perror("open key file error");
+            return 1;
+        }
 
-        if ((outfd = open(argv[3], wflags, S_IRUSR | S_IWUSR)) == -1)
+        if ((infd = open(argv[3], rflags, S_IRUSR | S_IWUSR)) == -1) {
+            perror("open input file error");
+            return 1;
+        }
+
+        if ((outfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1) {
             perror("open output file error");
+            return 1;
+        }
 
         ftruncate(outfd, 0);
-        if (mode == 1)
-            encrypt(infd, outfd);
-        else
-            decrypt(infd, outfd);
+        if (mode == 1) {
+            key = createRSAFromFD(keyfd, 1);
+            encrypt(key, infd, outfd);
+        }
+        else {
+            key = createRSAFromFD(keyfd, 0);
+            decrypt(key, infd, outfd);
+        }
 
+        RSA_free(key);
+        close(keyfd);
         close(infd);
         fsync(outfd); close(outfd);
     }
