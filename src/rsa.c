@@ -60,10 +60,10 @@ void enable_echo() {
     tcsetattr(fileno(stdin), TCSAFLUSH, &term);
 }
 
-void get_passwd(char * pass, int passlen) {
+void get_passwd(char * pass, int passlen, int minlimit) {
     bzero(pass, passlen);
 
-    while (strlen(pass) < 10) {
+    while (strlen(pass) < minlimit) {
         printf("Enter private key passphrase: ");
         fflush(stdout);
         disable_echo();
@@ -72,8 +72,8 @@ void get_passwd(char * pass, int passlen) {
         printf("\n");
         // cut off last character (<Enter>)
         pass[strlen(pass)-1] = '\0';
-        if (strlen(pass) < 10) {
-            printf("Error: specified passphrase is too short (%d), it must contain at least 10 characters.\n", (int)strlen(pass));
+        if (strlen(pass) < minlimit) {
+            printf("Error: specified passphrase is too short (%d), it must contain at least %d characters.\n", (int)strlen(pass), minlimit);
             bzero(pass, passlen);
         }
     }
@@ -93,7 +93,7 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     // start with asking the user for a passphrase to encrypt the private key with
     // (storing unencrypted private keys is never a good idea, even in a proof-of-concept)
     pass = malloc(PASSLEN * sizeof(char));
-    get_passwd(pass, PASSLEN);
+    get_passwd(pass, PASSLEN, 10);
 
     // also make sure to seed the random numbers generator
     printf("Seeding random numbers generator...");
@@ -154,21 +154,9 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     return;
 }
 
-RSA * createRSA(unsigned char * key, int public) {
-    RSA * rsa = NULL;
-    BIO * keybio;
-    keybio = BIO_new_mem_buf(key, -1);
-    if (keybio==NULL) {
-        printf( "Failed to create key BIO");
-        return 0;
-    }
-
-    if(public)
-        rsa = PEM_read_bio_RSA_PUBKEY(keybio, &rsa, NULL, NULL);
-    else
-        rsa = PEM_read_bio_RSAPrivateKey(keybio, &rsa, NULL, NULL);
-
-    return rsa;
+int pass_callback(char * buf, int size, int rwflag, void * u) {
+    get_passwd(buf, size, 1);
+    return strlen(buf);
 }
 
 RSA * createRSAFromFD(int keyfd, int public) {
@@ -183,7 +171,11 @@ RSA * createRSAFromFD(int keyfd, int public) {
     if(public)
         rsa = PEM_read_RSA_PUBKEY(fp, &rsa, NULL, NULL);
     else
-        rsa = PEM_read_RSAPrivateKey(fp, &rsa, NULL, NULL);
+        rsa = PEM_read_RSAPrivateKey(fp, &rsa, pass_callback, NULL);
+
+    if (rsa == NULL) {
+        print_errors("Error while reading key");
+    }
 
     return rsa;
 }
@@ -227,6 +219,14 @@ void decrypt(RSA * prvkey, int infd, int outfd) {
 
 /* TODO */
 void encrypt(RSA * pubkey, int infd, int outfd) {
+//    int padding = RSA_PKCS1_PADDING;
+//
+//    int public_encrypt(unsigned char * data,int data_len,unsigned char * key, unsigned char *encrypted)
+//    {
+//        int result = RSA_public_encrypt(data_len,data,encrypted,rsa,padding);
+//        return result;
+//    }
+
 //    unsigned char inbuff[IP_SIZE], outbuf[OP_SIZE];
 //    int n, i;
 //
