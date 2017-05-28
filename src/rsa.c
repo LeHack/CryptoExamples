@@ -193,44 +193,45 @@ RSA * createRSAFromFD(int keyfd, int public) {
     return rsa;
 }
 
-/* TODO */
 void decrypt(RSA * prvkey, int infd, int outfd) {
-//    unsigned char inbuff[OP_SIZE], outbuf[IP_SIZE];
-//    int n = 0, bufready = 0, prev_n = 0, olen = 0;
-//
-//    while (1) {
-//        if (n > 0) {
-//            bzero(&outbuf, IP_SIZE);
-//            Camellia_cbc_encrypt(inbuff, outbuf, 16, &key, iv, 0);
-//            bufready = 1;
-//        }
-//
-//        bzero(&inbuff, OP_SIZE);
-//        if ((n = read(infd, inbuff, OP_SIZE)) == -1) {
-//            perror("read error");
-//            break;
-//        }
-//
-//        if (bufready && n == 0) {
-//            olen = IP_SIZE - outbuf[IP_SIZE - 1];
-//            if (prev_n == OP_SIZE)
-//                olen = IP_SIZE;
-//            if ((write(outfd, outbuf, olen)) == -1)
-//                perror("write error");
-//            break;
-//        }
-//        else if (bufready && n == OP_SIZE) {
-//            if ((write(outfd, outbuf, n)) == -1)
-//                perror("write error");
-//        }
-//
-//        prev_n = n;
-//    }
+    unsigned char * inbuf, * outbuf;
+    int n = 0, outbufready = 0, prev_n = 0, decsize = 0;
+
+    int padding = RSA_PKCS1_PADDING;
+    int bufsize = RSA_size(prvkey);
+
+    inbuf  = malloc(bufsize * sizeof(char));
+    outbuf = malloc(bufsize * sizeof(char));
+
+    while (1) {
+        bzero(inbuf, bufsize);
+        if ((n = read(infd, inbuf, bufsize)) == -1) {
+            perror("read error");
+            break;
+        }
+
+        if (!n)
+            break;
+
+        bzero(outbuf, bufsize);
+        decsize = RSA_private_decrypt(bufsize, inbuf, outbuf, prvkey, padding);
+        if (decsize < 0) {
+            print_errors("Problem while decrypting data block");
+            return;
+        }
+
+        if (write(outfd, outbuf, decsize) == -1) {
+            perror("write error");
+            return;
+        }
+    }
+
+    free(inbuf);
+    free(outbuf);
 
     return;
 }
 
-/* TODO */
 void encrypt(RSA * pubkey, int infd, int outfd) {
     unsigned char * inbuf = NULL, * outbuf = NULL;
     int n = 0, encsize = 0;
@@ -251,7 +252,7 @@ void encrypt(RSA * pubkey, int infd, int outfd) {
         }
 
         bzero(outbuf, writesize);
-        encsize = RSA_public_encrypt(readsize, inbuf, outbuf, pubkey, padding);
+        encsize = RSA_public_encrypt(n, inbuf, outbuf, pubkey, padding);
         if (encsize < 0) {
             print_errors("Problem while encrypting data block");
             return;
