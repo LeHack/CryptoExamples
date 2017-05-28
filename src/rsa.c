@@ -60,7 +60,7 @@ void enable_echo() {
     tcsetattr(fileno(stdin), TCSAFLUSH, &term);
 }
 
-void get_passwd(char * pass, int passlen, int minlimit) {
+void get_passwd(char * pass, const int passlen, const int minlimit) {
     bzero(pass, passlen);
 
     while (strlen(pass) < minlimit) {
@@ -81,10 +81,33 @@ void get_passwd(char * pass, int passlen, int minlimit) {
     return;
 }
 
-void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
-    unsigned char termbuf[1024], seedbuffer[32];
-    char * pass;
+void seed_rand(int verbose) {
+    unsigned char seedbuffer[32];
     int randfd = 0;
+
+    // also make sure to seed the random numbers generator
+    if (verbose) {
+        printf("Seeding random numbers generator...");
+        fflush(stdout);
+    }
+    if ((randfd = open("/dev/random", O_RDONLY)) == -1)
+        perror("/dev/random open error");
+
+    if (read(randfd, seedbuffer, 32) == -1)
+        perror("seed read error");
+
+    RAND_seed(seedbuffer, 32);
+    close(randfd);
+
+    if (verbose)
+        printf("OK\n");
+
+    return;
+}
+
+void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
+    unsigned char termbuf[1024];
+    char * pass;
 
     RSA * keypair = NULL;
     BIO * keybio = NULL;
@@ -95,20 +118,10 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     pass = malloc(PASSLEN * sizeof(char));
     get_passwd(pass, PASSLEN, 10);
 
-    // also make sure to seed the random numbers generator
-    printf("Seeding random numbers generator...");
-    fflush(stdout);
-    if ((randfd = open("/dev/random", O_RDONLY)) == -1)
-        perror("/dev/random open error");
-
-    if (read(randfd, seedbuffer, 32) == -1)
-        perror("seed read error");
-
-    RAND_seed(seedbuffer, 32);
-    close(randfd);
+    seed_rand(1);
 
     // prepare RSA struct
-    printf("OK\nGenerating RSA (%d bits) keypair...", keylen);
+    printf("Generating RSA (%d bits) keypair...", keylen);
     fflush(stdout);
 
     keypair = RSA_new();
@@ -168,7 +181,7 @@ RSA * createRSAFromFD(int keyfd, int public) {
 
     RSA * rsa = RSA_new();
 
-    if(public)
+    if (public)
         rsa = PEM_read_RSA_PUBKEY(fp, &rsa, NULL, NULL);
     else
         rsa = PEM_read_RSAPrivateKey(fp, &rsa, pass_callback, NULL);
@@ -219,36 +232,41 @@ void decrypt(RSA * prvkey, int infd, int outfd) {
 
 /* TODO */
 void encrypt(RSA * pubkey, int infd, int outfd) {
-//    int padding = RSA_PKCS1_PADDING;
-//
-//    int public_encrypt(unsigned char * data,int data_len,unsigned char * key, unsigned char *encrypted)
-//    {
-//        int result = RSA_public_encrypt(data_len,data,encrypted,rsa,padding);
-//        return result;
-//    }
+    unsigned char * inbuf = NULL, * outbuf = NULL;
+    int n = 0, encsize = 0;
 
-//    unsigned char inbuff[IP_SIZE], outbuf[OP_SIZE];
-//    int n, i;
-//
-//    while (1) {
-//        bzero(&inbuff, IP_SIZE);
-//
-//        if ((n = read(infd, inbuff, IP_SIZE)) == -1) {
-//            perror("read error");
-//            break;
-//        }
-//        else if (n == 0)
-//            break;
-//        else if (n < IP_SIZE) {
-//            for(i = n; i < IP_SIZE; i++)
-//                inbuff[i] = IP_SIZE - n;
-//        }
-//        Camellia_cbc_encrypt(inbuff, outbuf, 16, &key, iv, 1);
-//
-//        if ((n = write(outfd, outbuf, IP_SIZE)) == -1)
-//            perror("write error");
-//    }
-//
+    int padding = RSA_PKCS1_PADDING;
+    int writesize = RSA_size(pubkey);
+    // flen must be less than RSA_size(rsa) - 11 for the PKCS #1 v1.5 based padding modes
+    int readsize = writesize - 11;
+
+    inbuf  = malloc(readsize * sizeof(char));
+    outbuf = malloc(writesize * sizeof(char));
+
+    while (1) {
+        bzero(inbuf, readsize);
+        if ((n = read(infd, inbuf, readsize)) == -1) {
+            perror("read error");
+            break;
+        }
+
+        bzero(outbuf, writesize);
+        encsize = RSA_public_encrypt(readsize, inbuf, outbuf, pubkey, padding);
+        if (encsize < 0) {
+            print_errors("Problem while encrypting data block");
+            return;
+        }
+
+        if (write(outfd, outbuf, encsize) == -1)
+            perror("write error");
+
+        if (n < readsize)
+            break; // exit
+    }
+
+    free(inbuf);
+    free(outbuf);
+
     return;
 }
 
@@ -339,7 +357,8 @@ int main (int argc, char *argv[]) {
         }
 
         ftruncate(outfd, 0);
-        if (mode == 1) {
+        seed_rand(0);
+        if (mode == 2) {
             key = createRSAFromFD(keyfd, 1);
             encrypt(key, infd, outfd);
         }
