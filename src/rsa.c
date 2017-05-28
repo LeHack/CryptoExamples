@@ -169,6 +169,7 @@ void generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
 
 int pass_callback(char * buf, int size, int rwflag, void * u) {
     get_passwd(buf, size, 1);
+//    buf[0]='a';buf[1]='b';buf[2]='c';buf[3]='d';buf[4]='e';buf[5]='1';buf[6]='2';buf[7]='3';buf[8]='4';buf[9]='5';buf[10]='\0';
     return strlen(buf);
 }
 
@@ -358,7 +359,6 @@ int main (int argc, char *argv[]) {
         }
 
         ftruncate(outfd, 0);
-        seed_rand(0);
         if (mode == 2) {
             key = createRSAFromFD(keyfd, 1);
             encrypt(key, infd, outfd);
