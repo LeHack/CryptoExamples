@@ -1,20 +1,20 @@
 /*
- * This is a very simple implementation of a file encoder/decoder using
- * RSA cypher with PKCS#7 padding
+ * This is a very simple implementation of a file signing utility
+ * DSA cypher with SHA224 checksum
  *
  * Syntax:
- *  ./rsa [genkey|encrypt|decrypt] [params]
+ *  ./dsa [genkey|sing|verify] [params]
  * Example:
- *  ./rsa genkey 2048 priv.key pub.key
- *  ./rsa encrypt pub.key myfile.doc myfile.doc.enc
- *  ./rsa decrypt priv.key myfile.doc.enc myfile.doc
+ *  ./dsa genkey 2048 priv.key pub.key
+ *  ./dsa sign priv.key myfile.doc myfile.doc.sig
+ *  ./dsa verify pub.key myfile.doc myfile.doc.sig
  *
  * !!! WARNING !!!
  * This is a proof of concept. DO NOT use it to encode anything you actually want to protect.
  * While it could work, I'd strongly advice to use tools more suitable/safer like GPG.
  */
 
-#include <openssl/rsa.h>
+#include <openssl/dsa.h>
 #include <openssl/pem.h>
 #include <openssl/conf.h>
 #include <openssl/err.h>
@@ -111,7 +111,7 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     char * pass;
     int result = 1;
 
-    RSA * keypair = NULL;
+    DSA * keypair = NULL;
     BIO * keybio = NULL;
     BIGNUM * pubexp = NULL; // Public exponent
 
@@ -125,12 +125,12 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     get_passwd(pass, PASSLEN, 10);
 
     // prepare RSA struct
-    printf("Generating RSA (%d bits) keypair...", keylen);
+    printf("Generating DSA (%d bits) keypair...", keylen);
     fflush(stdout);
 
-    keypair = RSA_new();
+    keypair = DSA_new();
     if (keypair == NULL) {
-        print_errors("Problem while preparing RSA structure");
+        print_errors("Problem while preparing DSA structure");
         free(pass);
         return 0;
     }
@@ -140,10 +140,16 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     BN_set_word(pubexp, 17);
 
     // generate the keys
-    if (RSA_generate_key_ex(keypair, keylen, pubexp, NULL) == 0) {
-        print_errors("Problem while generating RSA keys");
+    int gen_keys = (
+        BN_generate_prime_ex(pubexp, keylen, 0, NULL, NULL, NULL)
+        && DSA_generate_parameters_ex(keypair, keylen, NULL, 0, NULL, NULL, NULL)
+        && DSA_generate_key(keypair)
+    );
+
+    if (!gen_keys) {
+        print_errors("Problem while generating DSA keys");
         free(pass);
-        RSA_free(keypair);
+        DSA_free(keypair);
         return 0;
     }
     else
@@ -152,7 +158,7 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     // create a new BIO for storing the key data
     keybio = BIO_new(BIO_s_mem());
     // print the data into the BIO
-    RSA_print(keybio, keypair, 4);
+    DSA_print(keybio, keypair, 4);
 
     // and print it out to the terminal
     bzero(termbuf, 1024);
@@ -165,13 +171,13 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     printf("Storing keypair...");
     fflush(stdout);
 
-    if (PEM_write_RSA_PUBKEY(pubkey, keypair) == 0) {
-        print_errors("Problem while storing RSA public key");
+    if (PEM_write_DSA_PUBKEY(pubkey, keypair) == 0) {
+        print_errors("Problem while storing DSA public key");
         result = 0;
     }
 
-    if (result && PEM_write_RSAPrivateKey(prvkey, keypair, EVP_camellia_128_cbc(), pass, strlen(pass), NULL, NULL) == 0) {
-        print_errors("Problem while storing RSA private key");
+    if (result && PEM_write_DSAPrivateKey(prvkey, keypair, EVP_camellia_128_cbc(), pass, strlen(pass), NULL, NULL) == 0) {
+        print_errors("Problem while storing DSA private key");
         result = 0;
     }
 
@@ -180,7 +186,7 @@ int generate_keys(int keylen, FILE * prvkey, FILE * pubkey) {
     else
         printf("ERR\n");
 
-    RSA_free(keypair);
+    DSA_free(keypair);
     free(pass);
 
     return result;
@@ -192,111 +198,129 @@ int pass_callback(char * buf, int size, int rwflag, void * u) {
     return strlen(buf);
 }
 
-RSA * createRSAFromFD(int keyfd, int public) {
+DSA * createDSAFromFD(int keyfd, int public) {
     FILE * fp = fdopen(keyfd, "rb");
     if(fp == NULL) {
         printf("Unable to open key stream\n");
         return NULL;
     }
 
-    RSA * rsa = RSA_new();
+    DSA * dsa = DSA_new();
 
     if (public)
-        rsa = PEM_read_RSA_PUBKEY(fp, &rsa, NULL, NULL);
+        dsa = PEM_read_DSA_PUBKEY(fp, &dsa, NULL, NULL);
     else
-        rsa = PEM_read_RSAPrivateKey(fp, &rsa, pass_callback, NULL);
+        dsa = PEM_read_DSAPrivateKey(fp, &dsa, pass_callback, NULL);
 
-    if (rsa == NULL) {
+    if (dsa == NULL) {
         print_errors("Error while reading key");
     }
 
-    return rsa;
+    return dsa;
 }
 
-int decrypt(RSA * prvkey, int infd, int outfd) {
-    unsigned char * inbuf, * outbuf;
-    int n = 0, outbufready = 0, prev_n = 0, decsize = 0, err = 1;
+int prepare_ssh224_digest(int infd, unsigned char * digest) {
+    const int readsize = 1024;
+    unsigned char inbuf[readsize];
+    int n = 0, result = 1;
 
-    int padding = RSA_PKCS1_PADDING;
-    int bufsize = RSA_size(prvkey);
+    SHA256_CTX * ctx;
+    ctx = malloc(sizeof(SHA256_CTX));
 
-    inbuf  = malloc(bufsize * sizeof(char));
-    outbuf = malloc(bufsize * sizeof(char));
-
-    while (1) {
-        bzero(inbuf, bufsize);
-        if ((n = read(infd, inbuf, bufsize)) == -1) {
-            perror("read error");
-            err = 0;
-            break;
-        }
-
-        if (!n)
-            break;
-
-        bzero(outbuf, bufsize);
-        decsize = RSA_private_decrypt(bufsize, inbuf, outbuf, prvkey, padding);
-        if (decsize < 0) {
-            print_errors("Problem while decrypting data block");
-            err = 0;
-            break;
-        }
-
-        if (write(outfd, outbuf, decsize) == -1) {
-            perror("write error");
-            err = 0;
-            break;
-        }
+    bzero(ctx, sizeof(SHA256_CTX));
+    if (SHA224_Init(ctx) == 0) {
+        print_errors("Could not init SHA context");
+        free(ctx);
+        return 0;
     }
-
-    free(inbuf);
-    free(outbuf);
-
-    return err;
-}
-
-int encrypt(RSA * pubkey, int infd, int outfd) {
-    unsigned char * inbuf = NULL, * outbuf = NULL;
-    int n = 0, encsize = 0, err = 1;
-
-    int padding = RSA_PKCS1_PADDING;
-    int writesize = RSA_size(pubkey);
-    // flen must be less than RSA_size(rsa) - 11 for the PKCS #1 v1.5 based padding modes
-    int readsize = writesize - 11;
-
-    inbuf  = malloc(readsize * sizeof(char));
-    outbuf = malloc(writesize * sizeof(char));
 
     while (1) {
         bzero(inbuf, readsize);
         if ((n = read(infd, inbuf, readsize)) == -1) {
             perror("read error");
-            err = 0;
+            result = 0;
             break;
         }
+        // no more data
+        if (!n)
+            break;
 
-        bzero(outbuf, writesize);
-        encsize = RSA_public_encrypt(n, inbuf, outbuf, pubkey, padding);
-        if (encsize < 0) {
-            print_errors("Problem while encrypting data block");
-            err = 0;
+        if (SHA224_Update(ctx, inbuf, n) == 0) {
+            print_errors("Error while creating SHA digest during update");
+            result = 0;
             break;
         }
-
-        if (write(outfd, outbuf, encsize) == -1) {
-            perror("write error");
-            err = 0;
-            break;
-        }
-
-        if (n < readsize)
-            break; // exit
     }
 
-    free(inbuf);
-    free(outbuf);
+    bzero(digest, SHA224_DIGEST_LENGTH * sizeof(char));
+    if (result && SHA224_Final(digest, ctx) == 0) {
+        print_errors("Error while creating SHA digest during final");
+        result = 0;
+    }
 
-    return err;
+    free(ctx);
+
+    return result;
+}
+
+int verify(DSA * pubkey, int infd, int sigfd) {
+    unsigned char * sign, * digest;
+    int n = 0, result = 1, verify = 0;
+
+    int siglen = DSA_size(pubkey);
+    sign = malloc(siglen);
+
+    bzero(sign, siglen);
+    if ((n = read(sigfd, sign, siglen)) == -1) {
+        perror("signature read error");
+        free(sign);
+        return 0;
+    }
+
+    digest = malloc(SHA224_DIGEST_LENGTH * sizeof(char));
+    result = prepare_ssh224_digest(infd, digest);
+
+    if (result) {
+        result = DSA_verify(0, digest, SHA224_DIGEST_LENGTH, sign, n, pubkey);
+        if (result < 0)
+            print_errors("Error while verifying DSA signature");
+        else if (result)
+            printf("Signature correct.\n");
+        else
+            printf("Signature incorrect.\n");
+    }
+
+    free(sign);
+    free(digest);
+
+    return result;
+}
+
+int sign(DSA * prvkey, int infd, int sigfd) {
+    int result = 1, siglen = 0;
+
+    unsigned char * digest, * sign;
+    digest = malloc(SHA224_DIGEST_LENGTH * sizeof(char));
+    sign   = malloc(DSA_size(prvkey));
+
+    result = prepare_ssh224_digest(infd, digest);
+
+    bzero(sign, DSA_size(prvkey));
+    if (result && DSA_sign(0, digest, SHA224_DIGEST_LENGTH, sign, &siglen, prvkey) == 0) {
+        print_errors("Error while creating SHA digest during final");
+        result = 0;
+    }
+
+    free(digest);
+
+    if (write(sigfd, sign, siglen) == -1) {
+        perror("write error");
+        result = 0;
+    }
+
+    free(sign);
+
+    return result;
 }
 
 int validate_params(int argc, char *argv[]) {
@@ -306,10 +330,10 @@ int validate_params(int argc, char *argv[]) {
         if (strcmp(argv[1], "genkey") == 0)
             mode = 1;
 
-        if (strcmp(argv[1], "encrypt") == 0)
+        if (strcmp(argv[1], "sign") == 0)
             mode = 2;
 
-        if (strcmp(argv[1], "decrypt") == 0)
+        if (strcmp(argv[1], "verify") == 0)
             mode = 3;
 
         // reset mode if any of the params is missing
@@ -321,7 +345,8 @@ int validate_params(int argc, char *argv[]) {
         printf("Bad or incomplete parameters\n");
         printf("Syntax:\n");
         printf("\tgenkey keylength priv.key pub.key\n");
-        printf("\t[encrypt|decrypt] keyfile infile outfile\n");
+        printf("\tsign priv.key file file.sig\n");
+        printf("\tverify pub.key file file.sig\n");
     }
 
     return mode;
@@ -329,9 +354,9 @@ int validate_params(int argc, char *argv[]) {
 
 int main (int argc, char *argv[]) {
     int rflags = 0, wflags = 0, error = 0,
-        prvkeyfd = 0, pubkeyfd = 0, infd = 0, outfd = 0, keyfd = 0;
+        prvkeyfd = 0, pubkeyfd = 0, infd = 0, sigfd = 0, keyfd = 0;
     FILE * prvkey = NULL, * pubkey = NULL;
-    RSA * key = NULL;
+    DSA * key = NULL;
 
     int mode = validate_params(argc, argv);
     if (mode == 0) {
@@ -374,7 +399,7 @@ int main (int argc, char *argv[]) {
         close(prvkeyfd);
         close(pubkeyfd);
     }
-    // encryption/descryption
+    // encryption/description
     else {
         if ((keyfd = open(argv[2], rflags, S_IRUSR | S_IWUSR)) == -1) {
             perror("open key file error");
@@ -386,27 +411,34 @@ int main (int argc, char *argv[]) {
             return 1;
         }
 
-        if ((outfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1) {
-            perror("open output file error");
-            return 1;
-        }
-
-        ftruncate(outfd, 0);
         if (mode == 2) {
-            key = createRSAFromFD(keyfd, 1);
-            if (key == NULL || !encrypt(key, infd, outfd))
+            if ((sigfd = open(argv[4], wflags, S_IRUSR | S_IWUSR)) == -1) {
+                perror("open signature file error");
                 error = 1;
+            }
+            else {
+                ftruncate(sigfd, 0);
+                key = createDSAFromFD(keyfd, 0);
+                if (key == NULL || !sign(key, infd, sigfd))
+                    error = 1;
+            }
         }
         else {
-            key = createRSAFromFD(keyfd, 0);
-            if (key == NULL || !decrypt(key, infd, outfd))
+            if ((sigfd = open(argv[4], rflags, S_IRUSR | S_IWUSR)) == -1) {
+                perror("open signature file error");
                 error = 1;
+            }
+            else {
+                key = createDSAFromFD(keyfd, 1);
+                if (key == NULL || !verify(key, infd, sigfd))
+                    error = 1;
+            }
         }
 
-        RSA_free(key);
+        DSA_free(key);
         close(keyfd);
         close(infd);
-        fsync(outfd); close(outfd);
+        fsync(sigfd); close(sigfd);
     }
 
     CRYPTO_cleanup_all_ex_data();

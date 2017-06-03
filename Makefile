@@ -6,12 +6,17 @@ CFLAGS=-I~/openssl/include/ -L~/openssl/lib/
 ODIR=bin
 LIBS=-lcrypto
 
-all: Camellia_CBC Camellia_ECB RSA
+all: Camellia_CBC Camellia_ECB RSA DSA
 
 RSA:
 	@echo 'Building RSA: $@'
 	@mkdir -p $(ODIR)
 	@$(CC) -o $(ODIR)/rsa $(SRC)/rsa.c $(CFLAGS) $(LIBS)
+
+DSA:
+	@echo 'Building DSA: $@'
+	@mkdir -p $(ODIR)
+	@$(CC) -o $(ODIR)/dsa $(SRC)/dsa.c $(CFLAGS) $(LIBS)
 
 Camellia_CBC: 
 	@echo 'Building Camellia CBC variant: $@'
@@ -24,7 +29,7 @@ Camellia_ECB:
 	@$(CC) -o $(ODIR)/camellia_ecb $(SRC)/camellia_ecb.c $(CFLAGS) $(LIBS)
 
 clean:
-	@echo 'Removing: camellia_cbc camellia_ecb rsa'
-	@rm -rf $(ODIR)/camellia_cbc $(ODIR)/camellia_ecb $(ODIR)/rsa
+	@echo 'Removing: camellia_cbc camellia_ecb rsa dsa'
+	@rm -rf $(ODIR)/camellia_cbc $(ODIR)/camellia_ecb $(ODIR)/rsa $(ODIR)/dsa
 
 .PHONY: all clean
