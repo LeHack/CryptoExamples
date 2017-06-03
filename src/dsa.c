@@ -399,7 +399,7 @@ int main (int argc, char *argv[]) {
         close(prvkeyfd);
         close(pubkeyfd);
     }
-    // encryption/description
+    // encryption/decryption
     else {
         if ((keyfd = open(argv[2], rflags, S_IRUSR | S_IWUSR)) == -1) {
             perror("open key file error");
