@@ -1,6 +1,6 @@
 /*
  * This is a very simple implementation of a file encoder/decoder using
- * RSA cypher with PKCS#7 padding
+ * RSA cypher with PKCS#1 padding
  *
  * Syntax:
  *  ./rsa [genkey|encrypt|decrypt] [params]
